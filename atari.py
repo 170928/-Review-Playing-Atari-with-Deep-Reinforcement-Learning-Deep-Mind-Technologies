@@ -3,6 +3,7 @@
 # https://gist.github.com/jcwleo
 # http://www.modulabs.co.kr/RL_library/3652
 # https://becominghuman.ai/lets-build-an-atari-ai-part-1-dqn-df57e8ff3b26
+# https://github.com/SangHoon-Joo/Breakout_DQN/blob/master/breakout_test.py
 # 코드를 참조했습니다.
 import tensorflow as tf
 import gym
