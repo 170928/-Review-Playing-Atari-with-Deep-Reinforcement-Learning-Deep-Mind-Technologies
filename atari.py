@@ -5,7 +5,8 @@
 # https://becominghuman.ai/lets-build-an-atari-ai-part-1-dqn-df57e8ff3b26
 # 코드를 참조했습니다.
 import tensorflow as tf
-import gym 
+import gym
+import os
 import numpy as np
 import random as ran
 from collections import deque
@@ -15,39 +16,23 @@ from  skimage.color import rgb2gray
 from skimage.transform import resize
 
 env = gym.make('BreakoutDeterministic-v4')
-
-MINIBATCH_SIZE = 32
-HISTORY_SIZE = 4
-TRAIN_START =  50000
-FINAL_EXPLORATION = 0.1
-TARGET_UPDATE = 10000
-MEMORY_SIZE = 400000
-EXPLORATION = 1000000
-START_EXPLORATION = 1.
-INPUT = env.observation_space
-OUTPUT = env.action_space
-HEIGHT = 80
-WEIGHT = 105
-LEARNING_RATE = 0.00025
-DISCOUNT = 0.99
-EPSILON = 0.01
-MOMENTUM = 0.95
+IMGSIZE = 84
 
 
-# Frame을 Convoludtion 2D를 위해 84x84 형태의 사각형으로 만들지 않는 방법입니다.
-# 105 x 80 형태의 이미지가 입력이 됩니다.
-def to_grayscale(img):
-    return np.mean((img/255), axis=2).astype(np.uint8)
-
-def downsample(img):
-    return img[::2, ::2]
-
-def preprocess(img):
-    return to_grayscale(downsample(img))
-
-# reward has to be -1 , 0,  1
-def transform_reward(reward):
-    return np.sign(reward)
+# Frame을 Convoludtion 2D를 위해 84x84 형태의 사각형으로.
+class StateProcessor():
+    def __init__(self):
+        with tf.variable_scope("state_processor"):
+            #[210, 160, 3]이미지의 input
+            self.input_state = tf.placeholder(shape=[210, 160, 3], dtype=tf.uint8)
+            self.output = tf.image.rgb_to_grayscale(self.input_state)
+            self.output = tf.image.crop_to_bounding_box(self.output, 34, 0, 160, 160)
+            self.output = tf.image.resize_images(
+                self.output, [84, 84], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+            self.output = tf.squeeze(self.output)
+    def process(self, sess, state):
+        #[84, 84, 1] state representing grayscale values.
+        return sess.run(self.output, { self.input_state: state })
 
 
 def get_copy_var_ops(*, dest_scope_name="target", src_scope_name="main"):
@@ -61,23 +46,35 @@ def get_copy_var_ops(*, dest_scope_name="target", src_scope_name="main"):
 
 class DQN:
 
-    def __init__(self, sess, name):
+    def __init__(self, sess, name, summaries_dir=None):
 
+        self.summary_writer = None
         self.name = name
         self.num_hidden = 256
         self.num_action = 4
         self.size_batch = 32
 
-
         self.forward()
+
+        if summaries_dir:
+            summary_dir = os.path.join(summaries_dir, "summaries_{}".format(scope))
+            if not os.path.exists(summary_dir):
+                os.makedirs(summary_dir)
+            self.summary_writer = tf.summary.FileWriter(summary_dir)
+
+
 
     def forward(self):
 
         with tf.variable_scope(self.name):
 
+            # The target value
             self.Y = tf.placeholder(tf.float32, [self.size_batch] )
+            # Index of selected action
             self.action = tf.placeholder(tf.float32, [self.size_batch] )
-            self.frames = tf.placeholder(tf.float32, [self.size_batch, HEIGHT, WEIGHT, self.num_frame] )
+            # Frame input 84x84x4
+            self.X = tf.placeholder(tf.uint8, [self.size_batch, IMGSIZE, IMGSIZE, self.num_frame] )
+            self.frames = tf.to_float(self.X)/255.0
 
             self.f1 = tf.get_variable(name='conv_w1', shape=[8,8,4,16], initializer=xavier_initializer())
             self.f2 = tf.get_variable(name='conv_w2', shape=[4,4,16,32], initializer=xavier_initializer())
@@ -94,11 +91,33 @@ class DQN:
             fc1 = tf.matmul(h2, w1)
             fc1 = tf.nn.relu(fc1)
             # out 변수는 DQN을 거친 결과로 [batch_size, num_action]
-            out = tf.matmul(fc1, w2)
-            
+            self.pred_qval= tf.matmul(fc1, w2)
 
+            # Get the predictions for the chosen actions only
+            mask = tf.one_hot(action, 4, on_value=1, off_value=0)
+            mask = tf.to_float(mask)
 
+            pred_selected_qval = tf.multiply(self.pred_qval, mask)
+            self.pred_action = tf.reduce_sum(pred_selected_qval, reduction_indices=[1])
 
+            # Get loss
+            self.losses = tf.squared_difference(self.Y, self.pred_action)
+            self.loss = tf.reduce_mean(self.losses)
+
+            # Optimalizer
+            self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.95,0.0,1e-6)
+            self.train_op = self.optimizer.minimize(self.loss)
+
+            # Tensorboard
+            self.summaries = tf.summary.merge([
+                tf.summary.scalar("Loss", self.loss)
+                tf.summary.scalar("Average Q Var", tf.reduce_mean(self.pred_action))
+            ])
+
+    def pred(self, sess, state):
+        return sess.run(self.pred_qval, feed_dict={self.X : state})
+
+    
 
 if __name__ == "__main__":
 
