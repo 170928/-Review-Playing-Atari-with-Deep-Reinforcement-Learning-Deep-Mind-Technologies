@@ -2,6 +2,7 @@
 # 김태훈님 ( https://github.com/devsisters/DQN-tensorflow )
 # https://gist.github.com/jcwleo
 # http://www.modulabs.co.kr/RL_library/3652
+# https://becominghuman.ai/lets-build-an-atari-ai-part-1-dqn-df57e8ff3b26
 # 코드를 참조했습니다.
 import tensorflow as tf
 import gym 
@@ -23,27 +24,31 @@ TARGET_UPDATE = 10000
 MEMORY_SIZE = 400000
 EXPLORATION = 1000000
 START_EXPLORATION = 1.
-INPUT = env.obseravtion_space.shape
-OUTPUT = env.observation_space
-HEIGHT = 84
-WEIGHT = 84
+INPUT = env.observation_space
+OUTPUT = env.action_space
+HEIGHT = 80
+WEIGHT = 105
 LEARNING_RATE = 0.00025
 DISCOUNT = 0.99
 EPSILON = 0.01
 MOMENTUM = 0.95
 
-def get_init_state(frames, s):
-    #episode 초기화
-    for i in range(4):
-        frames[:,:,:i] = preprocessing(s)
 
+# Frame을 Convoludtion 2D를 위해 84x84 형태의 사각형으로 만들지 않는 방법입니다.
+# 105 x 80 형태의 이미지가 입력이 됩니다.
+def to_grayscale(img):
+    return np.mean((img/255), axis=2).astype(np.uint8)
 
-def cliped_error(err):
-    return tf.where(tf.abs(err) < 1.0, 0.5 * tf.square(err), tf.abs(err) - 0.5)
+def downsample(img):
+    return img[::2, ::2]
 
+def preprocess(img):
+    return to_grayscale(downsample(img))
 
-def preprocessing(frame):
-    return np.uint8(resize(rgb2gray(frame), (84, 84), mode='reflect') * 255)
+# reward has to be -1 , 0,  1
+def transform_reward(reward):
+    return np.sign(reward)
+
 
 def get_copy_var_ops(*, dest_scope_name="target", src_scope_name="main"):
     op_holder=[]
@@ -57,26 +62,16 @@ def get_copy_var_ops(*, dest_scope_name="target", src_scope_name="main"):
 class DQN:
     def __init__(self, sess, name):
 
-        self.sess = sess
-        self.num_episode = 3000
-        self.num_action = 4
-        self.num_frame = 4
-        self.discount_factor = 0.9
-        self.eps_decay = 0.95
-        self.eps_interval = 10
-        self.size_memory = 40000
-        self.size_batch = 32
-        self.num_fc = 256
-        self.name = name
 
         self.forward()
 
     def forward(self):
 
         with tf.variable_scope(self.name):
+
             self.Y = tf.placeholder(tf.float32, [self.size_batch])
-            self.action = tf.placeholder(tf.float32, [self.size_batch])
-            self.frames = tf.placeholder(tf.float32, [self.size_batch, 84, 84, self.num_frame])
+            self.action = tf.placeholder(tf.float32, [self.size_batch] )
+            self.frames = tf.placeholder(tf.float32, [self.size_batch, HEIGHT, WEIGHT, self.num_frame])
 
             self.f1 = tf.get_variable(name='conv_w1', shape=[8,8,4,16], initializer=xavier_initializer())
             self.f2 = tf.get_variable(name='conv_w2', shape=[4,4,16, 32], initializer=xavier_initializer())
@@ -95,83 +90,15 @@ class DQN:
             fc2 = tf.matmul(fc1, w2)
 
 
-        self.one_hot = tf.one_hot(self.action, self.num_action,1.0,0.0)
-        self.q_values = tf.reduce_sum(tf.multiply(fc2, self.one_hot))
+if __name__ == "__main__":
 
-        error = cliped_error(self.Y - self.q_values)
-        self.loss = tf.reduce_mean(error)
+    frame = env.reset()
+    # Render
+    env.render()
 
-        optimizer = tf.train.RMSPropOptimizer(0.00025, momentum=self.eps_decay, epsilon=0.01)
-        self.train = optimizer.minimize(self.loss)
-
-
-    def get_q(self, mem):
-        return self.sess.run(self.q_values, feed_dict={self.frames : np.reshape(np.float32(mem/255), [-1, 84, 84, 4])})
-
-    def get_action(self, q, e):
-        if e > np.random.rand(1):
-            action = np.random.randint(self.num_action)
-        else:
-            action = np.argmax(q)
-        return action
-
-
-
-def main():
-    with tf.Session() as sess:
-        mainDQN = DQN(sess, 'main')
-        targetDQN = DQN(sess, 'target')
-
-        sess.run(tf.global_variables_initializer())
-
-        # weights copy operations
-        copy_ops = get_copy_var_ops(dest_scope_name='target', src_scope_name='main')
-
-        sess.run(copy_ops)
-
-        recent_rlist = deque(maxlen=100)
-        e = 1.
-        episode, epoch, frame = 0, 0, 0
-
-        epoch_score, epoch_Q = deque(), deque()
-        average_Q, average_reward = deque(), deque()
-
-        epoch_on = False
-        replay_memory = deque(maxlen=40000)
-
-        while epoch <= 3000:
-            episode += 1
-
-            frames = np.zeors([84,84,4], dtype = np.uint8)
-            rall, count = 0, 0
-            d = False
-            ter = False
-
-            s = env.reset()
-            get_init_state(frames, s)
-
-            while not d:
-                env.render()
-
-                frame+=1
-                count+=1
-
-                if e > 0.1 and frame > 50000:
-                    e-= (1.-0.1)/1000000
-
-                Q = mainDQN.get_q(frames[:,:,:4])
-                average_Q .append(np.max(Q))
-
-                action = mainDQN.get_action(Q,e)
-
-                s1, r, d, l = env.step(action)
-
-                ter = d
-                reward = np.clip(r, -1, 1)
-
-                frames[:,:,4] = preprocessing(s1)
-
-                replay_memory.append( (np.copy(frames[:,:,:]), action, reward, ter))
-                frames[:,:,4] = frames[:,:,1:]
-
-                rall += r
+    is_done = False
+    while not is_done:
+        # Perform a random action, returns the new frame, reward and whether the game is over
+        frame, reward, is_done, _ = env.step(env.action_space.sample())
+        # Render
+        env.render()
