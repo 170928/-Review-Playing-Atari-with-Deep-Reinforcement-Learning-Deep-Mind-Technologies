@@ -102,18 +102,21 @@ class DQN:
 
     def predict(self, sess, state):
 
-        return sess.run(self.pred_qval, feed_dict={self.X : state})
+        return sess.run(self.pred_qval, feed_dict={self.X : history_reshape(state)})
 
     def update(self, sess, state, action, y):
 
         feed_dict = {self.X : state, self.action : action, self.Y : y}
 
-        summaries, step, _, loss = sess.run([self.summaries, self.train_op, self.loss], feed_dict)
+        summaries, _, loss = sess.run([self.summaries, self.train_op, self.loss], feed_dict)
 
         if self.summary_writer:
             self.summary_writer.add_summary(summaries)
 
         return loss
+
+    def get_qVal(self, sess, action, state):
+        return sess.run(self.pred_action, feed_dict={self.X : history_reshape(state), self.action : action})
 
 
 def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
@@ -159,11 +162,14 @@ def history_update(history, new_state):
 
     return history
 
+
+
 def history_reshape(history):
     return np.reshape(history, [-1,84,84,4])
 
 
 def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
+
     state_array = np.array([x[0] for x in train_batch])
     action_array = np.array([x[1] for x in train_batch])
     reward_array = np.array([x[2] for x in train_batch])
@@ -171,23 +177,23 @@ def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
     done_array = np.array([x[4] for x in train_batch])
 
     X_batch = state_array
-
-    Y_batch = mainDQN.predict(sess, state_array)
+    Y_batch = mainDQN.get_qVal(sess, action_array, state_array)
 
     for i in range(len(train_batch)):
 
         if done_array[i] == True:
-            Y_batch[i, action_array[i]] = reward_array[i]
+            Y_batch[i] = reward_array[i]
         else:
-            Y_batch[i, action_array[i]] = reward_array[i] + dis * np.max(targetDQN.predict(sess, next_state_array[i]))
+            Y_batch[i] = reward_array[i] + dis * np.max(targetDQN.predict(sess, next_state_array[i]))
 
-    loss = mainDQN.update(sess, X_batch, Y_batch)
+    loss = mainDQN.update(sess, X_batch, action_array, Y_batch)
 
     return loss
 
 
 def main():
     history = np.zeros([84, 84, 4], dtype=np.uint8)
+    history_next = np.zeros([84,84,4], dtype=np.uint8)
     replay_buffer = deque(maxlen=REPLAY_MEMORY)
     last_100_game_reward = deque(maxlen=100)
 
@@ -198,7 +204,6 @@ def main():
         sess.run(tf.global_variables_initializer())
 
         get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
-
 
         for i in range(MAX_EPISODE):
             e = 1. / ((i / 500) + 1.)
@@ -226,14 +231,14 @@ def main():
                     reward = -100
 
                 next_x = pre_proc(next_state)
-                history = history_update(history, next_x)
+                history_next = history_update(history, next_x)
 
-                replay_buffer.append((history, action, reward, history[:,:,-1], done))
+                replay_buffer.append((history, action, reward, history_next, done))
 
                 if len(replay_buffer) > REPLAY_MEMORY:
                     replay_buffer.popleft()
 
-                state = next_x
+                history = history_update(history, next_x)
 
                 step_count += 1
                 if i % 20 == 0 and i > 50000:
@@ -245,7 +250,7 @@ def main():
 
             if i % 20 == 0 and i != 0 and i != 10:
                 for j in range(50):
-                    minibatch = random.sample(replay_buffer, 10)
+                    minibatch = random.sample(replay_buffer, 32)
                     loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
                 if i % 1000 == 0:
                     print("Episode: {}, Loss: {}".format(i, loss))
