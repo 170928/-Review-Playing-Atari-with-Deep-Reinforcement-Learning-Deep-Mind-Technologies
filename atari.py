@@ -193,16 +193,30 @@ def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
 
 
 def main():
+
     history = np.zeros([84, 84, 4], dtype=np.uint8)
     history_next = np.zeros([84,84,4], dtype=np.uint8)
     replay_buffer = deque(maxlen=REPLAY_MEMORY)
     last_100_game_reward = deque(maxlen=100)
 
-    with tf.Session() as sess:
-        mainDQN = DQN("main")
-        targetDQN = DQN("target")
 
-        sess.run(tf.global_variables_initializer())
+    mainDQN = DQN("main")
+    targetDQN = DQN("target")
+
+    SAVER_DIR = "./save/"
+    saver = tf.train.Saver()
+    checkpoint_path = os.path.join(SAVER_DIR, "model")
+    ckpt = tf.train.get_checkpoint_state(SAVER_DIR)
+
+    saver = tf.train.Saver()
+
+    with tf.Session() as sess:
+
+        if ckpt and ckpt.model_checkpoint_path:
+            print("[Restore Model]")
+            saver.restore(sess, ckpt.model_checkpoint_path)
+        else:
+            sess.run(tf.global_variables_initializer())
 
         get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
@@ -224,6 +238,8 @@ def main():
                     action = np.argmax(mainDQN.predict(sess, history))
 
                 next_state, reward, done, info = env.step(action)
+
+                reward = np.clip(reward, -1, 1)
 
                 if info['ale.lives'] < 5:
                     done = True
@@ -254,6 +270,7 @@ def main():
                     minibatch = random.sample(replay_buffer, 32)
                     loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
                 if i % 1000 == 0:
+                    saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
 
             if i % 20 == 0:
