@@ -6,49 +6,29 @@
 # 코드를 참조했습니다.
 import tensorflow as tf
 import gym
+import itertools
 import os
 import numpy as np
-import random as ran
-from collections import deque
-from argparse import ArgumentParser
+import random
 from tensorflow.contrib.layers import xavier_initializer
 from  skimage.color import rgb2gray
 from skimage.transform import resize
 from collections import deque, namedtuple
-#from lib import plotting
+from scipy.misc import imresize
+from skimage.color import rgb2gray
+from skimage.transform import resize
 
 env = gym.make('BreakoutDeterministic-v4')
+
+tf.set_random_seed(777)
+
 IMGSIZE = 84
 VALID_ACTIONS = [0, 1, 2, 3]
-
-
-# Frame을 Convoludtion 2D를 위해 84x84 형태의 사각형으로.
-class StateProcessor():
-    def __init__(self):
-        with tf.variable_scope("state_processor"):
-            #[210, 160, 3]이미지의 input
-            self.input_state = tf.placeholder(shape=[210, 160, 3], dtype=tf.uint8)
-            self.output = tf.image.rgb_to_grayscale(self.input_state)
-            self.output = tf.image.crop_to_bounding_box(self.output, 34, 0, 160, 160)
-            self.output = tf.image.resize_images(
-                self.output, [84, 84], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-            self.output = tf.squeeze(self.output)
-    def process(self, sess, state):
-        #[84, 84, 1] state representing grayscale values.
-        return sess.run(self.output, { self.input_state: state })
-
-
-def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
-
-    op_holder=[]
-    src_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=src_scope_name)
-    dst_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=dest_scope_name)
-
-    for src_var, dest_var in zip(src_vars, dst_vars):
-        op_holder.append(dst_vars.assign(src_var.value()))
-
-    sess.run(op_holder)
-
+learning_rate = 0.005
+dis = .99
+MAX_EPISODE = 500000
+BATCH_SIZE = 28
+REPLAY_MEMORY = 50000
 
 class DQN:
 
@@ -60,7 +40,7 @@ class DQN:
         self.num_action = 4
         self.size_batch = 32
 
-        self.forward()
+        self._build_model()
 
         if summaries_dir:
             summary_dir = os.path.join(summaries_dir, "summaries_{}".format(name))
@@ -70,16 +50,16 @@ class DQN:
 
 
 
-    def forward(self):
+    def _build_model(self):
 
-        with tf.variable_scope(self.name):
+        with tf.variable_scope(self.name) as scope:
 
             # The target value
-            self.Y = tf.placeholder(tf.float32, [self.size_batch] )
+            self.Y = tf.placeholder(tf.float32, [None] )
             # Index of selected action
-            self.action = tf.placeholder(tf.uint8, [self.size_batch] )
+            self.action = tf.placeholder(tf.uint8, [None] )
             # Frame input 84x84x4
-            self.X = tf.placeholder(tf.uint8, [self.size_batch, IMGSIZE, IMGSIZE, 4] )
+            self.X = tf.placeholder(tf.uint8, [None, IMGSIZE, IMGSIZE, 4] )
             self.frames = tf.to_float(self.X)/255.0
 
             self.f1 = tf.get_variable(name='conv_w1', shape=[8,8,4,16], initializer=xavier_initializer())
@@ -111,8 +91,8 @@ class DQN:
             self.loss = tf.reduce_mean(self.losses)
 
             # Optimalizer
-            self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.95,0.0,1e-6)
-            self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
+            self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.95, 0.0, 1e-6)
+            self.train_op = self.optimizer.minimize(self.loss)
 
             # Tensorboard
             self.summaries = tf.summary.merge([
@@ -120,266 +100,186 @@ class DQN:
                 tf.summary.scalar("Average Q Var", tf.reduce_mean(self.pred_action))
             ])
 
-    def pred(self, sess, state):
+    def predict(self, sess, state):
+
         return sess.run(self.pred_qval, feed_dict={self.X : state})
 
     def update(self, sess, state, action, y):
-        feed_dict = {self.X : state, self.action :action, self.Y : y}
-        summaries, step, _, loss = sess.run(
-            [self.summaries, tf.contrib.framework.get_global_step() ,self.train_op, self.loss], feed_dict)
+
+        feed_dict = {self.X : state, self.action : action, self.Y : y}
+
+        summaries, step, _, loss = sess.run([self.summaries, self.train_op, self.loss], feed_dict)
+
         if self.summary_writer:
             self.summary_writer.add_summary(summaries)
+
         return loss
 
 
-def make_epsilon_greedy_policy( model , num_action ):
+def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
 
-    def policy_fn(sess, state , epsilon):
-        temp = np.ones(num_action, dtype=float) * epsilon / num_action
+    op_holder=[]
+    src_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=src_scope_name)
+    dst_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=dest_scope_name)
 
-        q_values = model.pred(sess, np.expand_dims(state, 0))[0]
-        best_action = np.argmax(q_values)
+    for src_var, dst_var in zip(src_vars, dst_vars):
+        op_holder.append(dst_var.assign(src_var.value()))
 
-        temp[best_action] += (1.0 - epsilon)
-        # 확률 값의 array를 반환해주도록 하는 함수
-        return temp
-    return policy_fn
+    sess.run(op_holder)
 
+def crop_image(image, height_range=(34,195)):
+    h_begin, h_end = height_range
+    return image[h_begin:h_end, ...]
 
-def deep_q_learning(sess,
-                    env,
-                    main_model,
-                    target_model,
+def resize_image(image, HW_range):
+    return imresize(image, HW_range, interp="nearest")
 
-                    state_processor,
-                    num_episodes,
+def make_gray_image(image):
+    return rgb2gray(image)
 
-                    experiment_dir,
+def pre_proc(image):
+    temp_image = crop_image(image)
+    temp_image = make_gray_image(temp_image)
+    final_image = resize_image(temp_image, (84, 84))
+    return final_image
 
-                    replay_memory_size=500000,
-                    replay_memory_init_size=50000,
-                    update_target_model_every=10000,
+def history_init(history, state):
 
-                    discount_factor=0.99,
-                    epsilon_start=1.0,
-                    epsilon_end=0.1,
-                    epsilon_decay_steps=500000,
-                    batch_size=32,
-                    record_video_every=50):
+    for i in range(4):
+        history[:, :, i] = state
 
-    """
-    Q-Learning algorithm for off-policy TD control using Function Approximation.
-    Finds the optimal greedy policy while following an epsilon-greedy policy.
-    Args:
-        sess: Tensorflow Session object
-        env: OpenAI environment
-        main_model: Estimator object used for the q values
-        target_model: Estimator object used for the targets
-        state_processor: A StateProcessor object
-        num_episodes: Number of episodes to run for
-        experiment_dir: Directory to save Tensorflow summaries in
-        replay_memory_size: Size of the replay memory
-        replay_memory_init_size: Number of random experiences to sampel when initializing
-          the reply memory.
-        update_target_model_every: Copy parameters from the Q estimator to the
-          target estimator every N steps
-        discount_factor: Gamma discount factor
-        epsilon_start: Chance to sample a random action when taking an action.
-          Epsilon is decayed over time and this is the start value
-        epsilon_end: The final minimum value of epsilon after decaying is done
-        epsilon_decay_steps: Number of steps to decay epsilon over
-        batch_size: Size of batches to sample from the replay memory
-        record_video_every: Record a video every N episodes
-    Returns:
-        An EpisodeStats object with two numpy arrays for episode_lengths and episode_rewards.
-    """
+    return history
 
-    Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
+def history_update(history, new_state):
 
-    # Replay memory =======================================================
-    replay_memory = []
-    # =====================================================================
+    for i in range(3):
+        history[:, :,i] = history[:, :, i+1]
+
+    history[:, :, -1] = new_state
+
+    return history
+
+def history_reshape(history):
+    return np.reshape(history, [-1,84,84,4])
 
 
-    # Directory Check ====================================================
-    checkpoint_dir = os.path.join(experiment_dir, "checkpoints")
-    checkpoint_path = os.path.join(checkpoint_dir, "model")
-    monitor_path = os.path.join(experiment_dir, "monitor")
+def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
+    state_array = np.array([x[0] for x in train_batch])
+    action_array = np.array([x[1] for x in train_batch])
+    reward_array = np.array([x[2] for x in train_batch])
+    next_state_array = np.array([x[3] for x in train_batch])
+    done_array = np.array([x[4] for x in train_batch])
 
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
-    if not os.path.exists(monitor_path):
-        os.makedirs(monitor_path)
-    # =====================================================================
+    X_batch = state_array
 
-    # Save Information Check ==============================================
-    saver = tf.train.Saver()
-    latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
-    if latest_checkpoint:
-        print("Loading model checkpoint {}...\n".format(latest_checkpoint))
-        saver.restore(sess, latest_checkpoint)
-    # =====================================================================
+    Y_batch = mainDQN.predict(sess, state_array)
 
-    # Epsilon Gradient ====================================================
-    # Epsilon Gradient 를 위해서 학습 과정에서의 Step Information을 받아와야한다.
-    # 이를 위해서 optimizer.minimize(global_step=tf.contrib.framework.get_global_step()) 와 같이 선언을 해두었다.
-    total_step = sess.run(tf.contrib.framework.get_global_step())
+    for i in range(len(train_batch)):
 
-    # Epsilon Decay 방법을 정의 =============================================
-    epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
-
-    policy = make_epsilon_greedy_policy(
-        main_model,
-        4)
-    # =====================================================================
-
-    # Replay memory =======================================================
-    # Frame 전처리================================
-    state = env.reset()
-    state = state_processor.process(sess, state)
-    state = np.stack([state] * 4, axis=2)
-    # ===========================================
-
-    for i in range(replay_memory_init_size):
-
-        action_probs = policy(sess, state, epsilons[min(total_step, epsilon_decay_steps-1)])
-        action = np.random.choice(np.arange(len(action_probs)), p=action_probs)
-
-        next_state, reward, done, _ = env.step(VALIDE_ACTIONS[action])
-
-        next_state = state_processor.process(sess, next_state)
-
-        next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
-
-        replay_memory.append(Transition(state, action, reward, next_state, done))
-
-        if done:
-            state = env.reset()
-            state = state_processor.process(sess, state)
-            state = np.stack([state] * 4, axis=2)
-
+        if done_array[i] == True:
+            Y_batch[i, action_array[i]] = reward_array[i]
         else:
-            state = next_state
+            Y_batch[i, action_array[i]] = reward_array[i] + dis * np.max(targetDQN.predict(sess, next_state_array[i]))
 
-    # Record videos
-    # Use the gym env Monitor wrapper
-    env = Monitor(env,
-                  directory=monitor_path,
-                  resume=True,
-                  video_callable=lambda count: count % record_video_every ==0)
+    loss = mainDQN.update(sess, X_batch, Y_batch)
+
+    return loss
 
 
-    for i_episode in range(num_episodes):
+def main():
+    history = np.zeros([84, 84, 4], dtype=np.uint8)
+    replay_buffer = deque(maxlen=REPLAY_MEMORY)
+    last_100_game_reward = deque(maxlen=100)
 
-        # Save the current checkpoint
-        saver.save(tf.get_default_session(), checkpoint_path)
+    with tf.Session() as sess:
+        mainDQN = DQN("main")
+        targetDQN = DQN("target")
 
-        # Frame 전처리================================
-        state = env.reset()
-        state = state_processor.process(sess, state)
-        state = np.stack([state] * 4, axis=2)
-        loss = None
-        # ===========================================
+        sess.run(tf.global_variables_initializer())
 
-        # t = 1 to T ================================
-        for t in itertools.count():
-
-            # Epsilon for this time step
-            epsilon = epsilons[min(total_step, epsilon_decay_steps-1)]
-
-            # Add epsilon to Tensorboard
-            episode_summary = tf.Summary()
-            episode_summary.value.add(simple_value=epsilon, tag="epsilon")
-            main_model.summary_writer.add_summary(episode_summary, total_step)
-
-            # Maybe update the target estimator
-            if total_step % update_target_estimator_every == 0:
-                get_copy_var_ops(sess, 'target', 'main')
-                print("\nCopied model parameters to target network.")
-
-            # Print out which step we're on, useful for debugging.
-            print("\rStep {} ({}) @ Episode {}/{}, loss: {}".format(
-                    t, total_step, i_episode + 1, num_episodes, loss), end="")
-            sys.stdout.flush()
-
-            # Take a step
-            action_probs = policy(sess, state, epsilon)
-            action = np.random.choice(np.arange(len(action_probs)), p=action_probs)
-            next_state, reward, done, _ = env.step(VALID_ACTIONS[action])
-            next_state = state_processor.process(sess, next_state)
-            next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
-
-            # If our replay memory is full, pop the first element
-            if len(replay_memory) == replay_memory_size:
-                replay_memory.pop(0)
-
-            # Save transition to replay memory
-            replay_memory.append(Transition(state, action, reward, next_state, done))
+        get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
 
-            # Sample a minibatch from the replay memory
-            samples = random.sample(replay_memory, batch_size)
-            states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples))
+        for i in range(MAX_EPISODE):
+            e = 1. / ((i / 500) + 1.)
+            done = False
+            state = env.reset()
+            x = pre_proc(state)
+            history = history_init(history, x)
 
-            # Calculate q values and targets (Double DQN)
-            q_values_next = main_model.pred(sess, next_states_batch)
-            best_actions = np.argmax(q_values_next, axis=1)
+            step_count = 0
+            reward_sum = 0
 
-            q_values_next_target = target_model.pred(sess, next_states_batch)
+            while not done:
 
-            targets_batch = reward_batch + np.invert(done_batch).astype(np.float32) * \
-                discount_factor * q_values_next_target[np.arange(batch_size), best_actions]
+                if np.random.rand(1) < e:
+                    action = np.random.randint(4)
+                else:
+                    action = np.argmax(mainDQN.predict(sess, history))
 
-            # Perform gradient descent update
-            states_batch = np.array(states_batch)
-            loss = main_model.update(sess, states_batch, action_batch, targets_batch)
+                next_state, reward, done, info = env.step(action)
 
-            if done:
+                if info['ale.lives'] < 5:
+                    done = True
+
+                if done:
+                    reward = -100
+
+                next_x = pre_proc(next_state)
+                history = history_update(history, next_x)
+
+                replay_buffer.append((history, action, reward, history[:,:,-1], done))
+
+                if len(replay_buffer) > REPLAY_MEMORY:
+                    replay_buffer.popleft()
+
+                state = next_x
+
+                step_count += 1
+                if i % 20 == 0 and i > 50000:
+                    env.render()
+
+            if step_count > 10000:
+                pass
                 break
 
-            state = next_state
-            total_step += 1
+            if i % 20 == 0 and i != 0 and i != 10:
+                for j in range(50):
+                    minibatch = random.sample(replay_buffer, 10)
+                    loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
+                if i % 1000 == 0:
+                    print("Episode: {}, Loss: {}".format(i, loss))
 
-        # Add summaries to tensorboard
-        episode_summary = tf.Summary()
-        q_estimator.summary_writer.add_summary(episode_summary, total_step)
-        q_estimator.summary_writer.flush()
+            if i % 20 == 0:
+                get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
+
+        bot_play(sess, mainDQN)
 
 
-    env.monitor.close()
-    return stats
+def bot_play(sess, mainDQN, env=env):
+    history = np.zeros([84, 84, 4], dtype=np.uint8)
+    state = env.reset()
+    reward_sum = 0
+    x = pre_proc(state)
+    history = history_init(history, x)
+    env.step(1)
+    while True:
+        env.render()
 
+        Qs = mainDQN.predict(sess, history)
+        action = np.argmax(Qs)
 
-tf.reset_default_graph()
+        state, reward, done, info = env.step(action)
+        reward_sum += reward
+        x = pre_proc(state)
+        history = history_update(history, x)
 
-# Where we save our checkpoints and graphs
-experiment_dir = os.path.abspath("./experiments/{}".format(env.spec.id))
+        if info['ale.lives'] < 5:
+            done = True
 
-# Create a glboal step variable
-global_step = tf.Variable(0, name='global_step', trainable=False)
+        if done:
+            print("Total score: {}".format(reward_sum))
+            break
 
-# Create estimators
-main_model = DQN('main', summaries_dir=experiment_dir)
-target_model = DQN('target')
-
-# State processor
-state_processor = StateProcessor()
-
-with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
-    for t in deep_q_learning(sess,
-                                    env,
-                                    main_model=main_model,
-                                    target_model=target_model,
-                                    state_processor=state_processor,
-                                    experiment_dir=experiment_dir,
-                                    num_episodes=10000,
-                                    replay_memory_size=500000,
-                                    replay_memory_init_size=50000,
-                                    update_target_model_every=10000,
-                                    epsilon_start=1.0,
-                                    epsilon_end=0.1,
-                                    epsilon_decay_steps=500000,
-                                    discount_factor=0.99,
-                                    batch_size=32):
-        print("Step[", t, "]")
+if __name__=="__main__":
+    main()
