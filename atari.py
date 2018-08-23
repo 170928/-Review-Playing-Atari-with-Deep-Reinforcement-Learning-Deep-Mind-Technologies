@@ -60,7 +60,13 @@ def get_copy_var_ops(*, dest_scope_name="target", src_scope_name="main"):
     return op_holder
 
 class DQN:
+
     def __init__(self, sess, name):
+
+        self.name = name
+        self.num_hidden = 256
+        self.num_action = 4
+        self.size_batch = 32
 
 
         self.forward()
@@ -69,25 +75,29 @@ class DQN:
 
         with tf.variable_scope(self.name):
 
-            self.Y = tf.placeholder(tf.float32, [self.size_batch])
+            self.Y = tf.placeholder(tf.float32, [self.size_batch] )
             self.action = tf.placeholder(tf.float32, [self.size_batch] )
-            self.frames = tf.placeholder(tf.float32, [self.size_batch, HEIGHT, WEIGHT, self.num_frame])
+            self.frames = tf.placeholder(tf.float32, [self.size_batch, HEIGHT, WEIGHT, self.num_frame] )
 
             self.f1 = tf.get_variable(name='conv_w1', shape=[8,8,4,16], initializer=xavier_initializer())
-            self.f2 = tf.get_variable(name='conv_w2', shape=[4,4,16, 32], initializer=xavier_initializer())
+            self.f2 = tf.get_variable(name='conv_w2', shape=[4,4,16,32], initializer=xavier_initializer())
+            self.w1 = tf.get_variable(name='fc_w1',shape=[11*8*32 ,self.num_hidden], initializer=xavier_initializer())
+            self.w2 = tf.get_variable(name='fc_w2', shape=[self.num_hidden ,self.num_action], initializer=xavier_initializer())
 
             h1 = tf.nn.conv2d(self.frames, self.f1, strides=[1,4,4,1], padding='VALID')
             h1 = tf.nn.relu(h1)
             h2 = tf.nn.conv2d(h1, self.f2, strides=[1,2,2,1], padding='VALID')
             h2 = tf.nn.relu(h2)
+            # input의 형태가 [batch_size, ....]일때
+            # input을 [batch_size, -1] 로 변환시켜 준다.
             h2 = tf.contrib.layers.flatten(h2)
-
-            w1 = tf.get_variable(name='fc_w1',shape=[h2.get_shape().as_list()[1] ,self.num_fc], initializer=xavier_initializer())
             fc1 = tf.matmul(h2, w1)
             fc1 = tf.nn.relu(fc1)
+            # out 변수는 DQN을 거친 결과로 [batch_size, num_action]
+            out = tf.matmul(fc1, w2)
+            
 
-            w2 = tf.get_variable(name='fc_w2', shape=[fc1.get_shape().as_list()[1], self.num_action], initializer=xavier_initializer())
-            fc2 = tf.matmul(fc1, w2)
+
 
 
 if __name__ == "__main__":
