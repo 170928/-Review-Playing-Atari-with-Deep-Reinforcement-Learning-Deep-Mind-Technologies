@@ -241,11 +241,8 @@ def main():
 
                 reward = np.clip(reward, -1, 1)
 
-                if info['ale.lives'] < 5:
-                    done = True
-
                 if done:
-                    reward = -100
+                    reward = -5
 
                 next_x = pre_proc(next_state)
                 history_next = history_update(history, next_x)
@@ -258,18 +255,19 @@ def main():
                 history = history_update(history, next_x)
 
                 step_count += 1
-                if i % 20 == 0 and i > 50000:
-                    env.render()
+
+                env.render()
 
             if step_count > 10000:
                 pass
                 break
 
-            if i % 20 == 0 and i != 0 and i != 10:
+
+            if i % 20 == 0 and i >=20:
                 for j in range(50):
                     minibatch = random.sample(replay_buffer, 32)
                     loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
-                if i % 1000 == 0:
+                if i % 100 == 0:
                     saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
 
