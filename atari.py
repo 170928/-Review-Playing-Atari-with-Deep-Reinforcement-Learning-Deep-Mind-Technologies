@@ -155,7 +155,7 @@ def pre_process(X):
 def history_init(history, state):
 
     for i in range(4):
-        history[:, :, i] = state
+        history[:, :, i] = pre_process(state)
 
     return history
 
@@ -196,6 +196,9 @@ def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
 
     return loss
 
+TRAIN_START = 1000
+FINAL_EXPLORATION = 0.1
+TARGET_UPDATE = 10000
 
 def main():
 
@@ -225,21 +228,23 @@ def main():
 
         get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
-        for i in range(MAX_EPISODE):
+        e = 1.
+        frame = 0
 
+        for i in range(MAX_EPISODE):
 
             done = False
             state = env.reset()
-            x = pre_proc(state)
-            history = history_init(history, x)
+            history = history_init(history, state)
 
             step_count = 0
-            e = 1.
 
             while not done:
 
-                if step_count % 10 == 0 and e > 1e-5:
-                    e = e * 0.95
+                frame += 1
+
+                if e > FINAL_EXPLORATION and frame > TRAIN_START:
+                    e -= (1. - FINAL_EXPLORATION)/ 500000
 
                 if np.random.rand(1) < e:
                     action = np.random.randint(4)
@@ -247,43 +252,36 @@ def main():
                     action = np.argmax(mainDQN.predict(sess, history))
 
                 next_state, reward, done, info = env.step(action)
-
                 reward = np.clip(reward, -1, 1)
 
-                if done:
-                    reward = -5
+                next_state = pre_process(next_state)
 
-                next_x = pre_proc(next_state)
-                history_next = history_update(history, next_x)
 
-                replay_buffer.append((history, action, reward, history_next, done))
+                replay_buffer.append((history, action, reward, next_state, done))
 
                 if len(replay_buffer) > REPLAY_MEMORY:
                     replay_buffer.popleft()
 
-                history = history_update(history, next_x)
+                history = history_update(history, next_state)
 
                 step_count += 1
 
                 env.render()
 
-            if step_count > 10000:
-                pass
-                break
 
+            if frame > TRAIN_START:
 
-            if i % 20 == 0 and i >=20:
-                for j in range(50):
-                    minibatch = random.sample(replay_buffer, 32)
-                    loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
+                minibatch = random.sample(replay_buffer, 32)
+                loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
+
                 if i % 100 == 0:
                     saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
 
-            if i % 20 == 0:
-                get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
+                if frame % 10000 == 0:
+                    get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
-        bot_play(sess, mainDQN)
+
 
 
 def bot_play(sess, mainDQN, env=env):
