@@ -92,7 +92,7 @@ class DQN:
             self.loss = tf.reduce_mean(self.losses)
 
             # Optimalizer
-            self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.95, 0.0, 1e-6)
+            self.optimizer = tf.train.RMSPropOptimizer(0.00025, momentum=0.95, epsilon=0.01)
             self.train_op = self.optimizer.minimize(self.loss)
 
             # Tensorboard
@@ -146,6 +146,11 @@ def pre_proc(image):
     temp_image = make_gray_image(temp_image)
     final_image = resize_image(temp_image, (84, 84))
     return final_image
+
+
+def pre_process(X):
+    x = np.uint8(resize(rgb2gray(X), (84, 84), mode='reflect') * 255)
+    return x
 
 def history_init(history, state):
 
@@ -221,16 +226,20 @@ def main():
         get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
         for i in range(MAX_EPISODE):
-            e = 1. / ((i / 500) + 1.)
+
+
             done = False
             state = env.reset()
             x = pre_proc(state)
             history = history_init(history, x)
 
             step_count = 0
-            reward_sum = 0
+            e = 1.
 
             while not done:
+
+                if step_count % 10 == 0 and e > 1e-5:
+                    e = e * 0.95
 
                 if np.random.rand(1) < e:
                     action = np.random.randint(4)
