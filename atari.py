@@ -252,16 +252,16 @@ def main():
 
                 env.render()
 
-            print("Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f}".format(i, count, frame, np.mean(averageQ)))
+            print("Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f}".format(i, count, e, np.mean(averageQ)))
 
             if frame > TRAIN_START:
 
                 minibatch = random.sample(replay_buffer, 32)
                 loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
 
-                if i % 100 == 0:
+                if i % 1000 == 0:
                     saver.save(sess, checkpoint_path)
-                    print("\nEpisode: {}, Loss: {}\n".format(i, loss))
+                    #print("\nEpisode: {}, Loss: {}\n".format(i, loss))
 
                 if frame % 1000 == 0:
                     averageQ = deque()
