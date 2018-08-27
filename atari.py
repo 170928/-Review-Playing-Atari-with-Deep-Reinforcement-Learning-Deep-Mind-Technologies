@@ -76,7 +76,7 @@ class DQN:
             mask = tf.to_float(mask)
 
             pred_selected_qval = tf.multiply(self.pred_qval, mask)
-            self.pred_action = tf.reduce_sum(pred_selected_qval, reduction_indices=[1])
+            self.pred_action = tf.reduce_sum(pred_selected_qval, reduction_indices=1)
 
             # Get loss
             #self.losses = tf.squared_difference(self.Y, self.pred_action)
@@ -132,7 +132,6 @@ def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
     sess.run(op_holder)
 
 
-
 def pre_process(state):
     x = np.uint8(resize(rgb2gray(state), (84, 84), mode='reflect') * 255)
     return x
@@ -143,13 +142,14 @@ def history_init(history, state):
         history[:, :, i] = pre_process(state)
 
 
-
-
 def simple_replay_train(sess, mainDQN, targetDQN, mini_batch):
 
+    #print("[Bef]", np.shape(mini_batch))
     mini_batch = np.array(mini_batch).transpose()
+    #print("[Aft]", np.shape(mini_batch))
 
     history = np.stack(mini_batch[0], axis=0)
+    #print("[Hist]", np.shape(history))
 
     states = np.float32(history[:, :, :, :4]) / 255.
     actions = list(mini_batch[1])
@@ -161,6 +161,8 @@ def simple_replay_train(sess, mainDQN, targetDQN, mini_batch):
     dones = dones.astype(int)
 
     Q1 = targetDQN.predict(sess, next_states)
+    #print("Q1::", Q1)
+    #print("Max::", np.max(Q1, axis=1))
 
     y = rewards + (1 - dones) * 0.95 * np.max(Q1, axis=1)
 
@@ -174,10 +176,9 @@ FINAL_EXPLORATION = 0.1
 TARGET_UPDATE = 10000
 IMGSIZE = 84
 learning_rate = 0.005
-dis = .99
 MAX_EPISODE = 500000
-BATCH_SIZE = 28
-REPLAY_MEMORY = 50000
+BATCH_SIZE = 32
+REPLAY_MEMORY = 100000
 
 def main():
 
@@ -220,7 +221,6 @@ def main():
             state = env.reset()
             history_init(history, state)
 
-            step_count = 0
 
             while not done:
 
@@ -246,9 +246,10 @@ def main():
 
                 replay_buffer.append((np.copy(history[:,:,:]), action, reward, done))
 
-                history[:, :, :4] = history[:,:,1:]
+                history[:, :,:4] = history[:,:,1:]
 
-                step_count += 1
+                if len(replay_buffer) > 50000:
+                    [replay_buffer.popleft() for _i in range(50000-len(replay_buffer))]
 
                 env.render()
 
@@ -258,13 +259,16 @@ def main():
                 minibatch = random.sample(replay_buffer, 32)
                 loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
 
-                if i % 100 == 0:
+                if i % 1000 == 0:
                     saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
                     print("Average Q : {}".format(np.mean(averageQ)))
                     print("Epsilon : {}".format(e))
 
-                if frame % 100 == 0:
+                if frame % 10000 == 0:
+                    averageQ = deque()
+
+                if frame % 10000 == 0:
                     get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
 
