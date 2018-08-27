@@ -25,9 +25,8 @@ tf.set_random_seed(777)
 
 class DQN:
 
-    def __init__(self, name, summaries_dir=None):
+    def __init__(self, name):
 
-        self.summary_writer = None
         self.name = name
         self.num_hidden = 256
         self.num_action = 4
@@ -35,11 +34,6 @@ class DQN:
 
         self._build_model()
 
-        if summaries_dir:
-            summary_dir = os.path.join(summaries_dir, "summaries_{}".format(name))
-            if not os.path.exists(summary_dir):
-                os.makedirs(summary_dir)
-            self.summary_writer = tf.summary.FileWriter(summary_dir)
 
 
 
@@ -102,10 +96,7 @@ class DQN:
 
         feed_dict = {self.X : state, self.action : action, self.Y : y}
 
-        summaries, _, loss = sess.run([self.summaries, self.train_op, self.loss], feed_dict)
-
-        if self.summary_writer:
-            self.summary_writer.add_summary(summaries)
+        _, loss = sess.run([self.train_op, self.loss], feed_dict)
 
         return loss
 
@@ -119,6 +110,7 @@ class DQN:
         else:
             action = np.argmax(qVal)
         return action
+
 
 def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
 
@@ -207,7 +199,6 @@ def main():
         frame = 0
         replay_buffer = deque(maxlen=REPLAY_MEMORY)
 
-        averageQ = deque()
 
         env.reset()
         _,_,_, info = env.step(0)
@@ -219,6 +210,7 @@ def main():
             history = np.zeros([84, 84, 5], dtype=np.uint8)
             done = False
             count = 0
+            averageQ = deque()
             state = env.reset()
             history_init(history, state)
 
@@ -261,13 +253,10 @@ def main():
                         saver.save(sess, checkpoint_path)
                         #print("\nEpisode: {}, Loss: {}\n".format(i, loss))
 
-                    if frame % 50000 == 0:
-                        averageQ = deque()
-
                     if frame % 1000 == 0:
                         get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
-
+            # 각 에피소드가 끝날때 마다 학습 정보 출력
             print("Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f}".format(i, count, e, np.mean(averageQ)))
 
 
