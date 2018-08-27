@@ -252,7 +252,7 @@ def main():
 
                 env.render()
 
-            print("{Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f} ", i, count, frame, np.mean(averageQ))
+            print("Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f}".format(i, count, frame, np.mean(averageQ)))
 
             if frame > TRAIN_START:
 
