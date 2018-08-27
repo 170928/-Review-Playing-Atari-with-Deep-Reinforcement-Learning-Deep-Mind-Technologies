@@ -23,14 +23,6 @@ env = gym.make('BreakoutDeterministic-v4')
 
 tf.set_random_seed(777)
 
-IMGSIZE = 84
-VALID_ACTIONS = [0, 1, 2, 3]
-learning_rate = 0.005
-dis = .99
-MAX_EPISODE = 500000
-BATCH_SIZE = 28
-REPLAY_MEMORY = 50000
-
 class DQN:
 
     def __init__(self, name, summaries_dir=None):
@@ -60,15 +52,14 @@ class DQN:
             # Index of selected action
             self.action = tf.placeholder(tf.uint8, [None] )
             # Frame input 84x84x4
-            self.X = tf.placeholder(tf.uint8, [None, IMGSIZE, IMGSIZE, 4] )
-            self.frames = tf.to_float(self.X)/255.0
+            self.X = tf.placeholder(tf.float32, [None, IMGSIZE, IMGSIZE, 4] )
 
             self.f1 = tf.get_variable(name='conv_w1', shape=[8,8,4,16], initializer=xavier_initializer())
             self.f2 = tf.get_variable(name='conv_w2', shape=[4,4,16,32], initializer=xavier_initializer())
             self.w1 = tf.get_variable(name='fc_w1',shape=[2592 ,self.num_hidden], initializer=xavier_initializer())
             self.w2 = tf.get_variable(name='fc_w2', shape=[self.num_hidden ,self.num_action], initializer=xavier_initializer())
 
-            h1 = tf.nn.conv2d(self.frames, self.f1, strides=[1,4,4,1], padding='VALID')
+            h1 = tf.nn.conv2d(self.X, self.f1, strides=[1,4,4,1], padding='VALID')
             h1 = tf.nn.relu(h1)
             h2 = tf.nn.conv2d(h1, self.f2, strides=[1,2,2,1], padding='VALID')
             h2 = tf.nn.relu(h2)
@@ -88,8 +79,10 @@ class DQN:
             self.pred_action = tf.reduce_sum(pred_selected_qval, reduction_indices=[1])
 
             # Get loss
-            self.losses = tf.squared_difference(self.Y, self.pred_action)
-            self.loss = tf.reduce_mean(self.losses)
+            #self.losses = tf.squared_difference(self.Y, self.pred_action)
+            #self.loss = tf.reduce_mean(self.losses)
+
+            self.loss = tf.losses.huber_loss(self.Y, self.pred_action)
 
             # Optimalizer
             self.optimizer = tf.train.RMSPropOptimizer(0.00025, momentum=0.95, epsilon=0.01)
@@ -103,7 +96,7 @@ class DQN:
 
     def predict(self, sess, state):
 
-        return sess.run(self.pred_qval, feed_dict={self.X : history_reshape(state)})
+        return sess.run(self.pred_qval, feed_dict={self.X : np.reshape(state, [-1, 84, 84, 4])})
 
     def update(self, sess, state, action, y):
 
@@ -117,8 +110,15 @@ class DQN:
         return loss
 
     def get_qVal(self, sess, action, state):
-        return sess.run(self.pred_action, feed_dict={self.X : history_reshape(state), self.action : action})
+        return sess.run(self.pred_action, feed_dict={self.X : np.reshape(state, [-1, 84, 84, 4]), self.action : action})
 
+
+    def get_action(self, qVal, e):
+        if e > np.random.rand(1):
+            action = np.random.randint(4)
+        else:
+            action = np.argmax(qVal)
+        return action
 
 def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
 
@@ -131,25 +131,10 @@ def get_copy_var_ops(*, sess, dest_scope_name="target", src_scope_name="main"):
 
     sess.run(op_holder)
 
-def crop_image(image, height_range=(34,195)):
-    h_begin, h_end = height_range
-    return image[h_begin:h_end, ...]
-
-def resize_image(image, HW_range):
-    return imresize(image, HW_range, interp="nearest")
-
-def make_gray_image(image):
-    return rgb2gray(image)
-
-def pre_proc(image):
-    temp_image = crop_image(image)
-    temp_image = make_gray_image(temp_image)
-    final_image = resize_image(temp_image, (84, 84))
-    return final_image
 
 
-def pre_process(X):
-    x = np.uint8(resize(rgb2gray(X), (84, 84), mode='reflect') * 255)
+def pre_process(state):
+    x = np.uint8(resize(rgb2gray(state), (84, 84), mode='reflect') * 255)
     return x
 
 def history_init(history, state):
@@ -157,55 +142,44 @@ def history_init(history, state):
     for i in range(4):
         history[:, :, i] = pre_process(state)
 
-    return history
-
-def history_update(history, new_state):
-
-    for i in range(3):
-        history[:, :,i] = history[:, :, i+1]
-
-    history[:, :, -1] = new_state
-
-    return history
 
 
 
-def history_reshape(history):
-    return np.reshape(history, [-1,84,84,4])
+def simple_replay_train(sess, mainDQN, targetDQN, mini_batch):
 
+    mini_batch = np.array(mini_batch).transpose()
 
-def simple_replay_train(sess, mainDQN, targetDQN, train_batch):
+    history = np.stack(mini_batch[0], axis=0)
 
-    state_array = np.array([x[0] for x in train_batch])
-    action_array = np.array([x[1] for x in train_batch])
-    reward_array = np.array([x[2] for x in train_batch])
-    next_state_array = np.array([x[3] for x in train_batch])
-    done_array = np.array([x[4] for x in train_batch])
+    states = np.float32(history[:, :, :, :4]) / 255.
+    actions = list(mini_batch[1])
+    rewards = list(mini_batch[2])
+    next_states = np.float32(history[:, :, :, 1:]) / 255.
+    dones = mini_batch[3]
 
-    X_batch = state_array
-    Y_batch = mainDQN.get_qVal(sess, action_array, state_array)
+    # bool to binary
+    dones = dones.astype(int)
 
-    for i in range(len(train_batch)):
+    Q1 = targetDQN.predict(sess, next_states)
 
-        if done_array[i] == True:
-            Y_batch[i] = reward_array[i]
-        else:
-            Y_batch[i] = reward_array[i] + dis * np.max(targetDQN.predict(sess, next_state_array[i]))
+    y = rewards + (1 - dones) * 0.95 * np.max(Q1, axis=1)
 
-    loss = mainDQN.update(sess, X_batch, action_array, Y_batch)
+    # 업데이트 된 Q값으로 main네트워크를 학습
+    loss = mainDQN.update(sess, states, actions, y)
 
     return loss
 
 TRAIN_START = 1000
 FINAL_EXPLORATION = 0.1
 TARGET_UPDATE = 10000
+IMGSIZE = 84
+learning_rate = 0.005
+dis = .99
+MAX_EPISODE = 500000
+BATCH_SIZE = 28
+REPLAY_MEMORY = 50000
 
 def main():
-
-    history = np.zeros([84, 84, 4], dtype=np.uint8)
-    history_next = np.zeros([84,84,4], dtype=np.uint8)
-    replay_buffer = deque(maxlen=REPLAY_MEMORY)
-    last_100_game_reward = deque(maxlen=100)
 
 
     mainDQN = DQN("main")
@@ -230,12 +204,19 @@ def main():
 
         e = 1.
         frame = 0
+        replay_buffer = deque(maxlen=REPLAY_MEMORY)
+
+        env.reset()
+        _,_,_, info = env.step(0)
+        life = info['ale.lives']
 
         for i in range(MAX_EPISODE):
 
+
+            history = np.zeros([84, 84, 5], dtype=np.uint8)
             done = False
             state = env.reset()
-            history = history_init(history, state)
+            history_init(history, state)
 
             step_count = 0
 
@@ -246,23 +227,22 @@ def main():
                 if e > FINAL_EXPLORATION and frame > TRAIN_START:
                     e -= (1. - FINAL_EXPLORATION)/ 500000
 
-                if np.random.rand(1) < e:
-                    action = np.random.randint(4)
-                else:
-                    action = np.argmax(mainDQN.predict(sess, history))
+                action = mainDQN.get_action(mainDQN.predict(sess, np.float32(history[:,:,:4])/255.), e)
 
                 next_state, reward, done, info = env.step(action)
                 reward = np.clip(reward, -1, 1)
 
-                next_state = pre_process(next_state)
+                if life > info['ale.lives']:
+                    done = True;
+                else:
+                    done = False;
+
+                history[:,:,4] = pre_process(next_state)
 
 
-                replay_buffer.append((history, action, reward, next_state, done))
+                replay_buffer.append((np.copy(history[:,:,:]), action, reward, done))
 
-                if len(replay_buffer) > REPLAY_MEMORY:
-                    replay_buffer.popleft()
-
-                history = history_update(history, next_state)
+                history[:, :, :4] = history[:,:,1:]
 
                 step_count += 1
 
@@ -278,36 +258,12 @@ def main():
                     saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
 
-                if frame % 10000 == 0:
+                if frame % 100 == 0:
                     get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
 
 
 
-def bot_play(sess, mainDQN, env=env):
-    history = np.zeros([84, 84, 4], dtype=np.uint8)
-    state = env.reset()
-    reward_sum = 0
-    x = pre_proc(state)
-    history = history_init(history, x)
-    env.step(1)
-    while True:
-        env.render()
-
-        Qs = mainDQN.predict(sess, history)
-        action = np.argmax(Qs)
-
-        state, reward, done, info = env.step(action)
-        reward_sum += reward
-        x = pre_proc(state)
-        history = history_update(history, x)
-
-        if info['ale.lives'] < 5:
-            done = True
-
-        if done:
-            print("Total score: {}".format(reward_sum))
-            break
 
 if __name__=="__main__":
     main()
