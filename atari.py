@@ -218,6 +218,7 @@ def main():
 
             history = np.zeros([84, 84, 5], dtype=np.uint8)
             done = False
+            count = 0
             state = env.reset()
             history_init(history, state)
 
@@ -225,9 +226,10 @@ def main():
             while not done:
 
                 frame += 1
+                count += 1
 
                 if e > FINAL_EXPLORATION and frame > TRAIN_START:
-                    e -= (1. - FINAL_EXPLORATION)/ 500000
+                    e -= (1. - FINAL_EXPLORATION)/ 1000000
 
                 Q = mainDQN.predict(sess, np.float32(history[:,:,:4])/255.)
                 averageQ.append(np.max(Q))
@@ -237,38 +239,34 @@ def main():
                 reward = np.clip(reward, -1, 1)
 
                 if life > info['ale.lives']:
-                    done = True;
+                    ter = True;
                 else:
-                    done = False;
+                    ter = False;
 
                 history[:,:,4] = pre_process(next_state)
 
 
-                replay_buffer.append((np.copy(history[:,:,:]), action, reward, done))
+                replay_buffer.append((np.copy(history[:,:,:]), action, reward, ter))
 
                 history[:, :,:4] = history[:,:,1:]
 
-                if len(replay_buffer) > 50000:
-                    [replay_buffer.popleft() for _i in range(50000-len(replay_buffer))]
-
                 env.render()
 
+            print("{Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f} ", i, count, frame, np.mean(averageQ))
 
             if frame > TRAIN_START:
 
                 minibatch = random.sample(replay_buffer, 32)
                 loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
 
-                if i % 1000 == 0:
+                if i % 100 == 0:
                     saver.save(sess, checkpoint_path)
-                    print("Episode: {}, Loss: {}".format(i, loss))
-                    print("Average Q : {}".format(np.mean(averageQ)))
-                    print("Epsilon : {}".format(e))
+                    print("\nEpisode: {}, Loss: {}\n".format(i, loss))
 
-                if frame % 10000 == 0:
+                if frame % 1000 == 0:
                     averageQ = deque()
 
-                if frame % 10000 == 0:
+                if frame % 1000 == 0:
                     get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
 
 

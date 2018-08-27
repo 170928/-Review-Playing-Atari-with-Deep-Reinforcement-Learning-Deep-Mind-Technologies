@@ -248,7 +248,7 @@ def main():
             get_init_state(history, s)
 
             while not d:
-                # env.render()
+                env.render()
 
                 frame += 1
                 count += 1
@@ -305,7 +305,7 @@ def main():
 
             if epoch_on:
                 epoch += 1
-                plot_data(epoch, epoch_score, average_reward, epoch_Q, average_Q, mainDQN)
+                #plot_data(epoch, epoch_score, average_reward, epoch_Q, average_Q, mainDQN)
                 epoch_on = False
                 average_reward = deque()
                 average_Q = deque()
