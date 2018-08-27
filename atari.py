@@ -206,6 +206,8 @@ def main():
         frame = 0
         replay_buffer = deque(maxlen=REPLAY_MEMORY)
 
+        averageQ = deque()
+
         env.reset()
         _,_,_, info = env.step(0)
         life = info['ale.lives']
@@ -227,7 +229,9 @@ def main():
                 if e > FINAL_EXPLORATION and frame > TRAIN_START:
                     e -= (1. - FINAL_EXPLORATION)/ 500000
 
-                action = mainDQN.get_action(mainDQN.predict(sess, np.float32(history[:,:,:4])/255.), e)
+                Q = mainDQN.predict(sess, np.float32(history[:,:,:4])/255.)
+                averageQ.append(np.max(Q))
+                action = mainDQN.get_action(Q, e)
 
                 next_state, reward, done, info = env.step(action)
                 reward = np.clip(reward, -1, 1)
@@ -257,6 +261,8 @@ def main():
                 if i % 100 == 0:
                     saver.save(sess, checkpoint_path)
                     print("Episode: {}, Loss: {}".format(i, loss))
+                    print("Average Q : {}".format(np.mean(averageQ)))
+                    print("Epsilon : {}".format(e))
 
                 if frame % 100 == 0:
                     get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
