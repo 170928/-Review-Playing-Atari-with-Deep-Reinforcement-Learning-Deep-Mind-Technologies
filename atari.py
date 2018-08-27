@@ -250,25 +250,25 @@ def main():
 
                 history[:, :,:4] = history[:,:,1:]
 
-                env.render()
+                #env.render()
+
+                if frame > TRAIN_START:
+
+                    minibatch = random.sample(replay_buffer, 32)
+                    loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
+
+                    if i % 1000 == 0:
+                        saver.save(sess, checkpoint_path)
+                        #print("\nEpisode: {}, Loss: {}\n".format(i, loss))
+
+                    if frame % 50000 == 0:
+                        averageQ = deque()
+
+                    if frame % 1000 == 0:
+                        get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
+
 
             print("Episode {0:6d} | PlayCount {1:5d} | e-greedy:{2:.5f} | Average Q {3:2.5f}".format(i, count, e, np.mean(averageQ)))
-
-            if frame > TRAIN_START:
-
-                minibatch = random.sample(replay_buffer, 32)
-                loss = simple_replay_train(sess, mainDQN, targetDQN, minibatch)
-
-                if i % 1000 == 0:
-                    saver.save(sess, checkpoint_path)
-                    #print("\nEpisode: {}, Loss: {}\n".format(i, loss))
-
-                if frame % 1000 == 0:
-                    averageQ = deque()
-
-                if frame % 1000 == 0:
-                    get_copy_var_ops(sess=sess, dest_scope_name="target", src_scope_name="main")
-
 
 
 
