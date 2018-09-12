@@ -242,7 +242,7 @@ def main():
 
                 history[:, :,:4] = history[:,:,1:]
 
-                #env.render()
+                env.render()
 
                 if frame > TRAIN_START:
 

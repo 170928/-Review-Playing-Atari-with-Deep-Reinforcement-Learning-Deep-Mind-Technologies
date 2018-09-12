@@ -237,7 +237,7 @@ def main():
 
         max_life = find_max_lifes(env)
         # Train agent during 200 epoch
-        while epoch <= 200:
+        while epoch <= 20000:
             episode += 1
 
             history = np.zeros([84, 84, 5], dtype=np.uint8)
