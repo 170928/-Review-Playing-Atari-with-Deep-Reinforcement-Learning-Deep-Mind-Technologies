@@ -1,5 +1,5 @@
 ## Introduction
-Playing-Atari-with-Deep-Reinforcement-Learning---Deep-Mind-Technologies 논문의 간단한 리뷰 입니다.
+Playing-Atari-with-Deep-Reinforcement-Learning---Deep-Mind-Technologies 논문의 간단한 리뷰 입니다..
 Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments 논문의 이해를 위해 기반이 되는 내용을 담고 있습니다.
 
 ## Abstract
